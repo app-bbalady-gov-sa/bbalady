@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>واجهة نشر الموقع على Netlify</title>
+  <!-- تضمين خط من Google Fonts -->
+  <link href="https://fonts.googleapis.com/css?family=Cairo:400,700&display=swap" rel="stylesheet">
+  <!-- تضمين مكتبة JSZip لضغط الملفات -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: 'Cairo', sans-serif;
+      direction: rtl;
+      background: linear-gradient(135deg, #74ABE2, #5563DE);
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .container {
+      background: #fff;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      text-align: center;
+      max-width: 500px;
+      width: 90%;
+    }
+    h1 {
+      color: #5563DE;
+      margin-top: 0;
+    }
+    p {
+      line-height: 1.5;
+    }
+    button {
+      background-color: #5563DE;
+      color: #fff;
+      border: none;
+      padding: 15px 25px;
+      margin: 10px;
+      border-radius: 5px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    button:hover {
+      background-color: #4450bb;
+    }
+    #result {
+      margin-top: 20px;
+      word-break: break-all;
+    }
+    a.deploy-link {
+      font-weight: bold;
+      color: #5563DE;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>واجهة نشر الموقع</h1>
+    <p>
+      اختر **مجلد** يحتوي على موقع الويب (صفحة HTML وملفاتها) باستخدام زر اختيار المجلد.<br>
+      بعد ذلك سيقوم النظام بضغط المجلد في أرشيف ZIP ثم رفعه إلى Netlify.
+    </p>
+    <!-- عنصر اختيار مجلد كامل: خاصية webkitdirectory (قد لا تعمل على جميع المتصفحات) -->
+    <input type="file" id="folderInput" style="display: none;" webkitdirectory directory multiple>
+    <button id="deployButton">انشر الموقع الآن</button>
+    <button id="fetchButton">عرض آخر رابط نشر</button>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    // بيانات Netlify الخاصة
+    const NETLIFY_SITE_ID = "7630c59e-ce3b-468b-9cce-c18ef9cc2631";
+    const NETLIFY_ACCESS_TOKEN = "nfp_UFXVEGFtP2Wzvx5i3hgydpQE62gm1Tfy267c";
+    const DEPLOY_ENDPOINT = `https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?access_token=${NETLIFY_ACCESS_TOKEN}`;
+
+    // دالة لعرض رسائل النتائج
+    function showResult(message, isError = false) {
+      const resultDiv = document.getElementById("result");
+      const p = document.createElement("p");
+      p.innerHTML = message;
+      if(isError) p.style.color = "red";
+      resultDiv.appendChild(p);
+    }
+
+    // دالة رفع الأرشيف ZIP إلى Netlify Deploy API
+    async function deploySite(zipBlob) {
+      const resultDiv = document.getElementById("result");
+      resultDiv.innerHTML = ""; // تفريغ النتائج السابقة
+      showResult("جارٍ رفع الملف إلى Netlify...");
+      try {
+        const response = await fetch(DEPLOY_ENDPOINT, {
+          method: "POST",
+          mode: "cors", // محاولة استخدام CORS، ولكن قد يظل هناك مشكلة (يُنصح باستخدام خادم وسيط)
+          headers: {
+            "Content-Type": "application/zip"
+          },
+          body: zipBlob
+        });
+
+        if (!response.ok) {
+          throw new Error("فشل إجراء النشر. رمز الخطأ: " + response.status);
+        }
+
+        const deployData = await response.json();
+        showResult("تم إرسال الطلب بنجاح! جاري التحقق من حالة النشر...");
+        pollDeployStatus(deployData.id);
+      } catch (error) {
+        console.error(error);
+        showResult(`حدث خطأ: ${error.message}`, true);
+      }
+    }
+
+    // دالة التحقق الدوري (Polling) من حالة النشر
+    function pollDeployStatus(deployId) {
+      const deployStatusUrl = `https://api.netlify.com/api/v1/deploys/${deployId}?access_token=${NETLIFY_ACCESS_TOKEN}`;
+      const intervalId = setInterval(async () => {
+        try {
+          const response = await fetch(deployStatusUrl);
+          if (!response.ok) {
+            throw new Error("فشل استرجاع حالة النشر.");
+          }
+          const data = await response.json();
+          showResult(`حالة النشر: ${data.state} ...`);
+          
+          if (data.state === "ready") {
+            clearInterval(intervalId);
+            const deployUrl = data.deploy_ssl_url || data.deploy_url;
+            showResult(`تم النشر بنجاح! الرابط: <a class="deploy-link" target="_blank" href="${deployUrl}">${deployUrl}</a>`);
+          }
+        } catch (error) {
+          console.error(error);
+          showResult(`خطأ في الحصول على حالة النشر: ${error.message}`, true);
+          clearInterval(intervalId);
+        }
+      }, 3000);
+    }
+
+    // دالة لجلب أحدث نشر (Deploy)
+    async function fetchLatestDeploy() {
+      const resultDiv = document.getElementById("result");
+      resultDiv.innerHTML = "";
+      showResult("جارٍ جلب آخر نشر...");
+      const fetchEndpoint = `https://api.netlify.com/api/v1/sites/${NETLIFY_SITE_ID}/deploys?access_token=${NETLIFY_ACCESS_TOKEN}`;
+      try {
+        const response = await fetch(fetchEndpoint);
+        if (!response.ok) {
+          throw new Error("فشل جلب النشرات. رمز الخطأ: " + response.status);
+        }
+        const deploys = await response.json();
+        if (deploys.length === 0) {
+          showResult("لا يوجد نشرات سابقة.");
+          return;
+        }
+        // نفترض أن أول عنصر هو الأحدث
+        const latest = deploys[0];
+        const deployUrl = latest.deploy_ssl_url || latest.deploy_url;
+        showResult(`آخر نشر: <a class="deploy-link" target="_blank" href="${deployUrl}">${deployUrl}</a>`);
+      } catch (error) {
+        console.error(error);
+        showResult(`حدث خطأ: ${error.message}`, true);
+      }
+    }
+
+    // عند الضغط على زر "انشر الموقع الآن" يتم فتح نافذة اختيار المجلد
+    document.getElementById("deployButton").addEventListener("click", () => {
+      document.getElementById("folderInput").click();
+    });
+
+    // عند اختيار المجلد يتم ضغط جميع ملفاته باستخدام JSZip ثم رفعه
+    document.getElementById("folderInput").addEventListener("change", async (e) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) {
+        alert("لم يتم اختيار مجلد.");
+        return;
+      }
+      showResult("جارٍ إنشاء أرشيف ZIP من المجلد المحدد...");
+      const zip = new JSZip();
+      // نستخدم الخاصية webkitRelativePath للحصول على المسار النسبي داخل المجلد
+      for (let file of files) {
+        const relativePath = file.webkitRelativePath || file.name;
+        zip.file(relativePath, file);
+      }
+      try {
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        // بعد إنشاء الأرشيف، نقوم بإرساله
+        deploySite(zipBlob);
+      } catch (err) {
+        console.error(err);
+        showResult("حدث خطأ أثناء إنشاء ZIP: " + err.message, true);
+      }
+    });
+
+    // زر عرض آخر نشر
+    document.getElementById("fetchButton").addEventListener("click", fetchLatestDeploy);
+  </script>
+</body>
+</html>
